@@ -4,52 +4,37 @@
 CODE_OFFSET equ 0x8
 DATA_OFFSET equ 0x10
 
-start:
-    jmp main
-
 main:
-    cli ; clear interrupts
-    xor ax, ax ; initialize registers
+    jmp gdt_error
+    cli                  ; Clear interrupts
+    xor ax, ax           ; Initialize registers
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7c00 ; set stack pointer at 0x7c00
-    sti ; enable interrupts
-    jmp load_protectedMode ; Load protected mode func
+    mov sp, 0x7c00       ; Set stack pointer at 0x7c00
+    sti
 
-
-; Include gdt.asm directly
-%include "./src/boot/gdt.asm"
-
+    mov si, msg_boot     ; Set SI to point to the string
+    call print          ; Call print function
 
 load_protectedMode:
+
     cli ; clear interrupts
     lgdt [gdt_descriptor] ; load GDT struct
-    mov eax, cr0 ;enable protected mode by changing the value of cr0 low bit
-    or al, 1
+    mov eax, cr0 ; Enable Protected Mode by changing CR0 low bit
+    or eax, 1
     mov cr0, eax
+
+    ; Ensure Protected Mode is enabled
     mov eax, cr0
-    test al, 1 ; Check if the lowest bit of CR0 is set (Protected Mode)
-    jz pm_error ; If not, jump to pm_error
+    test al, 1
+    jz gdt_error
 
-    jmp CODE_OFFSET:protectedMode_main ;Far jump to switch to protected mode
-
-; Display error message
-gdt_error:
-    mov si, error_msg_gdt
-    call print
-    cli
-    hlt
-
-; Display error message
-pm_error:
-    mov si, error_msg_pm
-    call print
-    cli
-    hlt
+    jmp CODE_OFFSET:protectedMode_main ; Far jump to flush prefetch queue
 
 [BITS 32]
-protectedMode_main: ; Switching to 32-bit PM from 16
+protectedMode_main:
+
     mov ax, DATA_OFFSET
     mov ds, ax
     mov es, ax
@@ -64,27 +49,34 @@ protectedMode_main: ; Switching to 32-bit PM from 16
     or al, 2     
     out 0x92, al ; Write the modified value back to the port
 
+    ; Verify A20 line
+    mov ax, 0x1234
+    mov [0x00007E00], ax
+    cmp ax, [0x00007E00]
+    jne pm_error
+
+    mov [0x00107E00], ax
+    cmp ax, [0x00107E00]
+    jne pm_error
+
+    jmp $ ; Hang if everything is successful
+
+gdt_error:
+    mov si, error_msg_gdt
+    call print
     jmp $
 
+pm_error:
+    mov si, error_msg_pm
+    call print
+    jmp $
 
-; Print function for error messages
-print:
-    lodsb ; loads byte at ds:si to AL register and increments SI
-    cmp al, 0x0
-    je done
-    mov ah, 0x0E
-    int 0x10
-    jmp print
+%include "src/boot/boot_print.asm"
+%include "src/boot/gdt.asm"
 
-done:
-    cli
-    hlt ; Stop further CPU execution
-
-error_msg_gdt: db 'Error: GDT loading failed!', 0
-error_msg_pm: db 'Error: Failed to enter protected mode!', 0
-
-
-
+msg_boot: db 'Start loading Boot...', 0x0
+error_msg_gdt: db 'Error: GDT loading failed!', 0x0
+error_msg_pm: db 'Error: Failed in Protected Mode initialization!', 0x0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
